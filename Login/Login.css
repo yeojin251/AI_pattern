@@ -1,0 +1,117 @@
+* {
+    margin: 0;
+    padding: 0;
+}
+
+ul {
+    list-style-type: none;
+}
+
+input {
+    width: 100px;
+    height: 16px;
+    border: 1px solid #cccccc;
+}
+
+select {
+    width: 80px;
+    height: 20px;
+    border: 1px solid #cccccc;
+    font-size: 12px;
+}
+
+body {
+    background-color: #F1F8E8;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+}
+
+/* 회원가입 박스 */
+#signup {
+  width: 700px;
+  margin-top: 30px;
+  background: #fff;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.1);
+}
+
+/* 제목 */
+#mem_title {
+    height: 25px;
+    margin-bottom: 15px;
+    border-bottom: 2px solid #1b894d;
+    display: flex;
+    align-items: center;
+}
+
+/* 폼 */
+#mem_form {
+    width: 100%;
+    color: #555;
+    font-size: 12px;
+    font-family: 'Noto Sans KR','sans-serif';
+}
+
+.row {
+    height: 30px;
+    margin-top: 15px;
+    border-bottom: 1px solid #cccccc;
+}
+
+.item {
+    display: flex;
+    align-items: center;
+}
+
+.col1 {
+    width: 120px;
+    display: flex;
+    align-items: start;
+    justify-content: flex-end;
+    padding-right: 8px;
+}
+
+.col2 {
+    margin-left: 10px;
+}
+
+.col2 > ul {
+    display: flex;
+    align-items: center;
+}
+
+.duplication-button {
+    margin-left: 4px;
+    padding: 2px 8px 3px;
+    border: none;
+    background-color: #396781;
+    color: white;
+    font-size: 8px;
+    cursor: pointer;
+}
+
+/* 버튼 */
+#buttons {
+    width: 100%;
+    margin-top: 20px;
+    display: flex;
+    justify-content: center;
+}
+
+#buttons > button {
+    padding: 6px 12px;
+    border: 1px solid #cccccc;
+    border-radius: 4px;
+    background: #fff;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+}
+
+.ok-button {
+    margin-left: 8px;
+}
