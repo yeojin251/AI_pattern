@@ -1,0 +1,2 @@
+schema,username,session_id,created_utc,path,rows,duration_ms,sha256,policy,min_events
+v2,wlsemrrl,8c6c7aa1e830,wlsemrrl-8c6c7aa1e830-20251014-151115.csv,423,44228.529052734375,23cfb2c1bd9ca4b756d3c7193cd379fc209cbd9cb348672dd334f7f2f90ff08b,threshold,600
