@@ -18,34 +18,44 @@ CORS(app, resources={r"/api/*": {"origins": "*"}})
 USERS = {}
 TOKENS = {}
 ASCII_MAPS = {}
-PRINTABLE = [i for i in range(32,127)]
+PRINTABLE = [i for i in range(32, 127)]
+
 
 def seeded_shuffle(seed: bytes):
     import struct
+
     x = struct.unpack("<I", hashlib.sha256(seed).digest()[:4])[0]
     arr = PRINTABLE[:]
-    for i in range(len(arr)-1,0,-1):
-        x ^= (x<<13)&0xffffffff; x ^= (x>>17); x ^= (x<<5)&0xffffffff
-        j = x % (i+1)
-        arr[i],arr[j] = arr[j],arr[i]
+    for i in range(len(arr) - 1, 0, -1):
+        x ^= (x << 13) & 0xFFFFFFFF
+        x ^= x >> 17
+        x ^= (x << 5) & 0xFFFFFFFF
+        j = x % (i + 1)
+        arr[i], arr[j] = arr[j], arr[i]
     return arr
+
 
 def create_ascii_map_for_user(username: str):
     version = 1
     shuffled = seeded_shuffle(f"user:{username}:v{version}".encode())
     mapping = {str(PRINTABLE[i]): shuffled[i] for i in range(len(PRINTABLE))}
-    map_id  = hashlib.sha256(f"{username}:{version}".encode()).hexdigest()[:16]
+    map_id = hashlib.sha256(f"{username}:{version}".encode()).hexdigest()[:16]
     ASCII_MAPS[map_id] = {"map": mapping, "version": version}
     map_hash = hashlib.sha256(json.dumps(mapping, sort_keys=True).encode()).hexdigest()
-    tx_id = "0x"+secrets.token_hex(8)
-    print(f"[CHAIN] PutAsciiMap user={username} mapId={map_id} hash={map_hash} v={version} tx={tx_id}")
+    tx_id = "0x" + secrets.token_hex(8)
+    print(
+        f"[CHAIN] PutAsciiMap user={username} mapId={map_id} hash={map_hash} v={version} tx={tx_id}"
+    )
     return map_id, tx_id
 
+
 def _auth_user_from_header():
-    auth = request.headers.get("Authorization","")
-    if not auth.startswith("Bearer "): return None
-    token = auth.split(" ",1)[1]
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    token = auth.split(" ", 1)[1]
     return TOKENS.get(token)
+
 
 # ===== 계정/로그인/매핑 =====
 @app.post("/api/signup")
@@ -53,8 +63,8 @@ def api_signup():
     data = request.get_json(force=True)
     username = (data.get("username") or "").strip().lower()
     password = data.get("password") or ""
-    name     = (data.get("name") or "").strip()
-    email    = (data.get("email") or "").strip()
+    name = (data.get("name") or "").strip()
+    email = (data.get("email") or "").strip()
 
     if not username or not password or not name or not email:
         return jsonify(error="필수 항목 누락"), 400
@@ -67,11 +77,14 @@ def api_signup():
 
     USERS[username] = {
         "pwd_hash": generate_password_hash(password),
-        "name": name, "email": email, "createdAt": time.time()
+        "name": name,
+        "email": email,
+        "createdAt": time.time(),
     }
     map_id, tx_id = create_ascii_map_for_user(username)
     USERS[username]["map_id"] = map_id
     return jsonify(ok=True, asciiMapId=map_id, txId=tx_id), 201
+
 
 @app.post("/api/login")
 def api_login():
@@ -85,18 +98,22 @@ def api_login():
     TOKENS[token] = username
     return jsonify(token=token)
 
+
 @app.get("/api/me/ascii-map")
 def api_map():
     user = _auth_user_from_header()
-    if not user: return jsonify(error="인증 필요"), 401
+    if not user:
+        return jsonify(error="인증 필요"), 401
     map_id = USERS[user]["map_id"]
     payload = ASCII_MAPS.get(map_id)
     return jsonify(asciiMap=payload["map"], version=payload["version"])
+
 
 # ===== 패턴 학습(수집) =====
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data_biometrics")
 os.makedirs(DATA_DIR, exist_ok=True)
 SESS = {}
+
 
 def _active_session_for(user):
     for sid, s in SESS.items():
@@ -104,36 +121,51 @@ def _active_session_for(user):
             return sid, s
     return None, None
 
+
 @app.post("/api/pattern/start")
 def pattern_start():
     user = _auth_user_from_header()
-    if not user: return jsonify(error="인증 필요"), 401
+    if not user:
+        return jsonify(error="인증 필요"), 401
     j = request.get_json(silent=True) or {}
     policy = j.get("policy", "threshold")
     min_events = int(j.get("min_events", 600))
 
     sid_active, s_active = _active_session_for(user)
     if sid_active:
-        return jsonify(ok=True, session_id=sid_active, already_active=True,
-                       total=s_active["count"], file=os.path.basename(s_active["path"]))
+        return jsonify(
+            ok=True,
+            session_id=sid_active,
+            already_active=True,
+            total=s_active["count"],
+            file=os.path.basename(s_active["path"]),
+        )
 
     session_id = uuid.uuid4().hex[:12]
     stamp = time.strftime("%Y%m%d-%H%M%S")
     fpath = os.path.join(DATA_DIR, f"{user}-{session_id}-{stamp}.csv")
     with open(fpath, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["ts_down","ts_up","dwell_ms","flight_ms","code","prev_code","key"])
+        w.writerow(
+            ["ts_down", "ts_up", "dwell_ms", "flight_ms", "code", "prev_code", "key"]
+        )
 
     SESS[session_id] = {
-        "user": user, "path": fpath, "count": 0,
-        "policy": policy, "min_events": min_events, "active": True
+        "user": user,
+        "path": fpath,
+        "count": 0,
+        "policy": policy,
+        "min_events": min_events,
+        "active": True,
     }
     return jsonify(ok=True, session_id=session_id)
+
 
 @app.post("/api/pattern/collect")
 def pattern_collect():
     user = _auth_user_from_header()
-    if not user: return jsonify(error="인증 필요"), 401
+    if not user:
+        return jsonify(error="인증 필요"), 401
 
     j = request.get_json(force=True)
     sid = j.get("session_id")
@@ -158,7 +190,7 @@ def pattern_collect():
                 flight = "" if flight is None else float(flight)
                 code = str(r.get("code", ""))
                 prev_code = str(r.get("prev_code", ""))
-                key  = str(r.get("key", ""))
+                key = str(r.get("key", ""))
                 if dwell >= 0:
                     w.writerow([tsd, tsu, dwell, flight, code, prev_code, key])
                     added += 1
@@ -173,10 +205,12 @@ def pattern_collect():
 
     return jsonify(ok=True, added=added, total=s["count"], stop=stop_now)
 
+
 @app.post("/api/pattern/stop")
 def pattern_stop():
     user = _auth_user_from_header()
-    if not user: return jsonify(error="인증 필요"), 401
+    if not user:
+        return jsonify(error="인증 필요"), 401
     j = request.get_json(force=True)
     sid = j.get("session_id")
     if not sid or sid not in SESS:
@@ -187,31 +221,47 @@ def pattern_stop():
     s["active"] = False
     return jsonify(ok=True, total=s["count"], file=os.path.basename(s["path"]))
 
+
 @app.get("/api/pattern/status")
 def pattern_status():
     user = _auth_user_from_header()
-    if not user: return jsonify(error="인증 필요"), 401
+    if not user:
+        return jsonify(error="인증 필요"), 401
     sid = request.args.get("sid")
-    mine = {k:v for k,v in SESS.items() if v["user"] == user}
+    mine = {k: v for k, v in SESS.items() if v["user"] == user}
     if sid:
         if sid not in mine:
             return jsonify(error="invalid or not my session"), 400
         s = mine[sid]
         size = os.path.getsize(s["path"]) if os.path.exists(s["path"]) else 0
-        return jsonify(session_id=sid, active=s["active"], total=s["count"],
-                       file=os.path.basename(s["path"]), bytes=size)
-    out=[]
-    for k,s in mine.items():
+        return jsonify(
+            session_id=sid,
+            active=s["active"],
+            total=s["count"],
+            file=os.path.basename(s["path"]),
+            bytes=size,
+        )
+    out = []
+    for k, s in mine.items():
         size = os.path.getsize(s["path"]) if os.path.exists(s["path"]) else 0
-        out.append({"session_id":k, "active":s["active"], "total":s["count"],
-                    "file":os.path.basename(s["path"]), "bytes":size})
+        out.append(
+            {
+                "session_id": k,
+                "active": s["active"],
+                "total": s["count"],
+                "file": os.path.basename(s["path"]),
+                "bytes": size,
+            }
+        )
     return jsonify(out)
+
 
 # ===== 분석/프로파일/시각화 =====
 @app.post("/api/pattern/analyze")
 def analyze_pattern():
     user = _auth_user_from_header()
-    if not user: return jsonify(error="인증이 필요합니다."), 401
+    if not user:
+        return jsonify(error="인증이 필요합니다."), 401
     try:
         print(f"[{user}] 분석 시작")
         feature_vector = analysis.create_feature_vector(user)
@@ -234,41 +284,97 @@ def analyze_pattern():
         app.logger.error(f"[{user}] 분석 오류: {e}", exc_info=True)
         return jsonify(error=f"서버 분석 오류: {e}"), 500
 
+
 # ===== 실시간 인증 =====
 @app.post("/api/pattern/verify")
 def verify_pattern():
     user = _auth_user_from_header()
-    if not user: return jsonify(error="인증이 필요합니다."), 401
+    if not user:
+        return jsonify(error="인증이 필요합니다."), 401
 
     data = request.get_json(force=True)
     samples = data.get("samples", [])
     if not samples:
         return jsonify(error="분석할 샘플 데이터가 없습니다."), 400
 
-    model_path   = f"user_models/{user}_iforest_model.pkl"
+    model_path = f"user_models/{user}_iforest_model.pkl"
     profile_path = f"user_profiles/{user}_profile.pkl"
     if not (os.path.exists(model_path) and os.path.exists(profile_path)):
-        return jsonify(error=f"'{user}'의 모델/프로필이 없습니다. 먼저 분석 및 학습을 완료하세요."), 404
+        return (
+            jsonify(
+                error=f"'{user}'의 모델/프로필이 없습니다. 먼저 분석 및 학습을 완료하세요."
+            ),
+            404,
+        )
 
     try:
-        model   = joblib.load(model_path)
+        model = joblib.load(model_path)
         profile = joblib.load(profile_path)
-        scaler  = profile["scaler"]
+        scaler = profile["scaler"]
+        pair_stats = profile.get("pair_stats", {})
 
         live_df = pd.DataFrame(samples)
-        X_live  = build_features(live_df).dropna()
+        X_live = build_features(live_df).dropna()
         if X_live.empty:
             return jsonify(error="유효한 피처가 없습니다."), 400
-
         Xz = scaler.transform(X_live.values)
+
+        # 1차: IForest inlier 비율
         preds = model.predict(Xz)  # 1: 정상, -1: 이상
         inlier_ratio = float((preds == 1).sum() / len(preds))
         is_user = bool(inlier_ratio >= 0.5)  # 필요시 0.6~0.7
 
-        return jsonify({"is_user": is_user, "score": f"{inlier_ratio:.2%}"})
+        # 2차: digram 잔차 z-score (작을수록 좋음 → 점수로 변환) 11/4 추가
+        z_list = []
+        if {"prev_code", "code", "flight_ms"} <= set(live_df.columns):
+            di = live_df.dropna(subset=["flight_ms"]).copy()
+            di["pair"] = di["prev_code"].astype(str) + "→" + di["code"].astype(str)
+            for _, r in di.iterrows():
+                p = r["pair"]
+                fl = float(r["flight_ms"])
+                if p in pair_stats:
+                    mu = pair_stats[p]["mu"]
+                    sd = max(pair_stats[p]["sd"], 1e-6)
+                    z_list.append(abs((fl - mu) / sd))
+        z_aux = float(np.mean(z_list)) if z_list else 3.0  # 없으면 보수적으로 크게
+
+        # z→[0,1] 점수 (작을수록 1에 가깝게)
+        aux_score = 1.0 / (1.0 + (z_aux / 2.0))  # z=0→1, z=2→~0.5, z=4→~0.33
+
+        # 속도 일변도 방지: kps 편차 패널티 11/4 추가
+        # 프로필에 저장된 전역 특징이 없으므로, live에서 근사: kps = 1000/dt
+        try:
+            kps_live = float((1000.0 / (X_live["dt_ms_clip"] + 1e-6)).median())
+        except Exception:
+            kps_live = 0.0
+        # 프로필의 전역 중앙값이 있으면 활용, 없으면 보수적으로 패스
+        kps_med = profile.get("kps_median", None)
+        kps_penalty = 1.0
+        if kps_med:
+            dev = abs(kps_live - float(kps_med)) / max(1e-6, float(kps_med))
+            if dev > 0.3:  # 30% 넘게 벗어나면 패널티
+                kps_penalty = max(0.6, 1.0 - 0.5 * (dev - 0.3))  # 0.6까지 감소
+
+        # 앙상블 최종점수
+        final = (0.6 * inlier_ratio + 0.4 * aux_score) * kps_penalty
+        is_user = bool(final >= 0.65)  # 권장 초기 임계
+
+        # 11/4 추가: 결과에 각 부분 점수도 반환
+        return jsonify(
+            {
+                "is_user": is_user,
+                "score": f"{final:.2%}",
+                "parts": {
+                    "inlier": round(inlier_ratio, 4),
+                    "aux": round(aux_score, 4),
+                    "kps_penalty": round(kps_penalty, 3),
+                },
+            }
+        )
     except Exception as e:
         app.logger.error(f"[{user}] verify 오류: {e}", exc_info=True)
         return jsonify(error=f"인증 중 서버 오류: {e}"), 500
+
 
 # ===== 에러 핸들러/실행 =====
 @app.errorhandler(404)
@@ -277,9 +383,11 @@ def not_found(e):
         return jsonify(error="Not Found"), 404
     return e, 404
 
+
 @app.errorhandler(500)
 def server_error(e):
     return jsonify(error="서버 내부 오류"), 500
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)

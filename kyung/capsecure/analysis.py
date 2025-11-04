@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 import matplotlib
+
 matplotlib.use("Agg")  # 서버/헤드리스 환경 안전
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -20,6 +21,7 @@ import joblib
 # === 7개 피처 공용 스펙 ===
 # 반드시 feature_spec.py의 FEATURE_NAMES와 동일하게 유지되어야 합니다.
 from feature_spec import build_features, FEATURE_NAMES
+
 
 # ============================ 한글 폰트 설정 ============================
 def ensure_korean_font():
@@ -39,7 +41,9 @@ def ensure_korean_font():
         if os.path.exists(p):
             try:
                 font_manager.fontManager.addfont(p)
-                rcParams["font.family"] = font_manager.FontProperties(fname=p).get_name()
+                rcParams["font.family"] = font_manager.FontProperties(
+                    fname=p
+                ).get_name()
                 rcParams["axes.unicode_minus"] = False
                 return
             except Exception:
@@ -47,10 +51,10 @@ def ensure_korean_font():
 
     # 2) 시스템 폰트 후보
     system_candidates = [
-        "Malgun Gothic",   # Windows
-        "AppleGothic",     # macOS
-        "NanumGothic",     # Linux (나눔고딕)
-        "Noto Sans CJK KR" # 일부 리눅스/컨테이너
+        "Malgun Gothic",  # Windows
+        "AppleGothic",  # macOS
+        "NanumGothic",  # Linux (나눔고딕)
+        "Noto Sans CJK KR",  # 일부 리눅스/컨테이너
     ]
     available = {f.name for f in font_manager.fontManager.ttflist}
     for name in system_candidates:
@@ -60,20 +64,24 @@ def ensure_korean_font():
             return
 
     # 3) 폰트 미발견 시 경고 (플롯은 생성되지만 한글이 깨질 수 있음)
-    print("[warn] 한글 폰트를 찾지 못했습니다. 프로젝트 fonts/ 폴더에 TTF/OTF를 넣어주세요.")
+    print(
+        "[warn] 한글 폰트를 찾지 못했습니다. 프로젝트 fonts/ 폴더에 TTF/OTF를 넣어주세요."
+    )
     rcParams["axes.unicode_minus"] = False
+
 
 ensure_korean_font()
 
 # ============================ 상수/경로 ============================
-DATA_DIR    = "data_biometrics"
+DATA_DIR = "data_biometrics"
 PROFILE_DIR = "user_profiles"
-FIGURE_DIR  = "user_figures"
+FIGURE_DIR = "user_figures"
 FEATURE_DIR = "user_features"  # 요약 피처 저장(선택)
 
 os.makedirs(PROFILE_DIR, exist_ok=True)
-os.makedirs(FIGURE_DIR,  exist_ok=True)
+os.makedirs(FIGURE_DIR, exist_ok=True)
 os.makedirs(FEATURE_DIR, exist_ok=True)
+
 
 # ============================ 1) 데이터 로딩/정제 ============================
 def load_user_data(username: str) -> pd.DataFrame | None:
@@ -129,10 +137,12 @@ def load_user_data(username: str) -> pd.DataFrame | None:
     print(f"[load_user_data] '{username}' {len(full)}건 로드/정제 완료.")
     return full.reset_index(drop=True)
 
+
 # ============================ 2) 특징 추출 ============================
 def _is_char_series(code_series: pd.Series) -> pd.Series:
     """'Char.'로 시작하는 실제 문자 키 여부"""
     return code_series.astype(str).str.startswith("Char.")
+
 
 def extract_global_features(df: pd.DataFrame, pause_thresh_ms: float = 500.0) -> dict:
     """세션 전체 전역 특징 (속도/오타/정지/리듬 등)"""
@@ -209,6 +219,7 @@ def extract_global_features(df: pd.DataFrame, pause_thresh_ms: float = 500.0) ->
 
     return feats
 
+
 def extract_ngram_features(
     df: pd.DataFrame, top_digraphs: int = 20, top_trigrams: int = 12
 ) -> dict:
@@ -240,7 +251,11 @@ def extract_ngram_features(
         tri["f23"] = pd.to_numeric(tri["flight_ms"], errors="coerce")
         tri = tri.dropna(subset=["c1", "c2", "c3", "f12", "f23"])
         tri["tri"] = (
-            tri["c1"].astype(str) + "→" + tri["c2"].astype(str) + "→" + tri["c3"].astype(str)
+            tri["c1"].astype(str)
+            + "→"
+            + tri["c2"].astype(str)
+            + "→"
+            + tri["c3"].astype(str)
         )
         tri["tri_time"] = (tri["f12"] + tri["f23"]) / 2.0
         cnt = tri["tri"].value_counts().head(top_trigrams)
@@ -248,11 +263,10 @@ def extract_ngram_features(
             s = tri.loc[tri["tri"] == t, "tri_time"].dropna()
             if not s.empty:
                 out[f"tri_time_mean[{t}]"] = float(s.mean())
-                out[f"tri_time_std[{t}]"] = (
-                    float(s.std(ddof=1)) if len(s) > 1 else 0.0
-                )
+                out[f"tri_time_std[{t}]"] = float(s.std(ddof=1)) if len(s) > 1 else 0.0
 
     return out
+
 
 def create_feature_vector(username: str) -> dict | None:
     """전역 특징 + N-gram 특징 합쳐 최종 벡터 생성"""
@@ -264,6 +278,7 @@ def create_feature_vector(username: str) -> dict | None:
     n = extract_ngram_features(df)
     vec = {**g, **n}
     return pd.Series(vec, dtype="float64").fillna(0).to_dict()
+
 
 # ============================ 3) 사용자 프로파일(7피처) ============================
 def create_and_save_user_profile(username: str):
@@ -289,17 +304,36 @@ def create_and_save_user_profile(username: str):
         return
 
     scaler = StandardScaler().fit(X.values)
+
+    # 추가: 사용자 상위 digram 통계 저장 11/4 추가
+    pair_stats = {}
+    if {"prev_code", "code", "flight_ms"} <= set(df.columns):
+        di = df.dropna(subset=["flight_ms"]).copy()
+        di["pair"] = di["prev_code"].astype(str) + "→" + di["code"].astype(str)
+        top_pairs = di["pair"].value_counts().head(30).index
+        for p in top_pairs:
+            s = pd.to_numeric(
+                di.loc[di["pair"] == p, "flight_ms"], errors="coerce"
+            ).dropna()
+            if len(s) >= 5:
+                pair_stats[p] = {
+                    "mu": float(s.mean()),
+                    "sd": float(s.std(ddof=1) or 1.0),
+                }
+
     profile = {
         "scaler": scaler,
         "feature_names": list(X.columns),  # 반드시 FEATURE_NAMES와 동일
         "created_at": pd.Timestamp.utcnow().isoformat(),
         "count": int(len(X)),
+        "pair_stats": pair_stats,  # 11/4 추가
     }
 
     os.makedirs(PROFILE_DIR, exist_ok=True)
     path = os.path.join(PROFILE_DIR, f"{username}_profile.pkl")
     joblib.dump(profile, path)
     print(f"[profile] 저장: {path} (features={list(X.columns)})")
+
 
 # ============================ 4) 시각화(확장) ============================
 def _rolling(series: pd.Series, window: int = 60):
@@ -308,6 +342,7 @@ def _rolling(series: pd.Series, window: int = 60):
         return series
     w = min(window, max(1, len(series) // 10))
     return series.rolling(w, min_periods=max(1, w // 3)).mean()
+
 
 def visualize_user_data(username: str, pause_thresh_ms: float = 500.0):
     """
@@ -342,7 +377,11 @@ def visualize_user_data(username: str, pause_thresh_ms: float = 500.0):
 
     # 3) pause 분포
     flight_valid = df["flight_ms"].dropna()
-    pause_rate = float((flight_valid > pause_thresh_ms).mean()) if not flight_valid.empty else 0.0
+    pause_rate = (
+        float((flight_valid > pause_thresh_ms).mean())
+        if not flight_valid.empty
+        else 0.0
+    )
 
     # 4) backspace
     is_bs = (df["code"] == "Key.backspace").astype(int)
@@ -364,10 +403,7 @@ def visualize_user_data(username: str, pause_thresh_ms: float = 500.0):
 
     # 6) per-key dwell 상위
     key_bar = (
-        df.groupby("code")["dwell_ms"]
-        .mean()
-        .sort_values(ascending=False)
-        .head(12)
+        df.groupby("code")["dwell_ms"].mean().sort_values(ascending=False).head(12)
     )
 
     # ===== 그림 =====
@@ -388,7 +424,9 @@ def visualize_user_data(username: str, pause_thresh_ms: float = 500.0):
     # 1) Dwell 분포
     sns.histplot(
         df["dwell_ms"].clip(upper=df["dwell_ms"].quantile(0.99)),
-        bins=50, kde=True, ax=ax1
+        bins=50,
+        kde=True,
+        ax=ax1,
     )
     ax1.set_title("Dwell Time 분포 (상위 1% 컷)")
     ax1.set_xlabel("dwell (ms)")
@@ -398,7 +436,9 @@ def visualize_user_data(username: str, pause_thresh_ms: float = 500.0):
     if not flight_valid.empty:
         sns.histplot(
             flight_valid.clip(upper=flight_valid.quantile(0.99)),
-            bins=50, kde=True, ax=ax2
+            bins=50,
+            kde=True,
+            ax=ax2,
         )
     ax2.set_title("Flight Time 분포 (상위 1% 컷)")
     ax2.set_xlabel("flight (ms)")
@@ -446,7 +486,9 @@ def visualize_user_data(username: str, pause_thresh_ms: float = 500.0):
     if run > 0:
         bursts.append(run)
     if bursts:
-        sns.histplot(pd.Series(bursts), bins=range(1, max(bursts) + 2), ax=ax8, discrete=True)
+        sns.histplot(
+            pd.Series(bursts), bins=range(1, max(bursts) + 2), ax=ax8, discrete=True
+        )
         ax8.set_title("Backspace 연속 버스트 분포")
         ax8.set_xlabel("burst length")
         ax8.set_ylabel("count")
@@ -481,6 +523,10 @@ def visualize_user_data(username: str, pause_thresh_ms: float = 500.0):
     nfeat = extract_ngram_features(df, top_digraphs=12, top_trigrams=8)
     summary = {**gfeat, **nfeat}
     os.makedirs(FEATURE_DIR, exist_ok=True)
-    with open(os.path.join(FEATURE_DIR, f"{username}_features.json"), "w", encoding="utf-8") as f:
+    with open(
+        os.path.join(FEATURE_DIR, f"{username}_features.json"), "w", encoding="utf-8"
+    ) as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
-    print(f"[visualize] 요약 특징 저장: {os.path.join(FEATURE_DIR, f'{username}_features.json')}")
+    print(
+        f"[visualize] 요약 특징 저장: {os.path.join(FEATURE_DIR, f'{username}_features.json')}"
+    )
