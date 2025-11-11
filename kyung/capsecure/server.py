@@ -1,23 +1,76 @@
-# server.py — Capstone Secure Keyboard (Flask API + Analysis/Verify)
+# server.py — Capstone Secure Keyboard (Flask API + SQLite/SQLAlchemy + Analysis/Verify)
 from flask import Flask, request, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_cors import CORS
-import pandas as pd
-import numpy as np
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import UniqueConstraint
 import os, csv, uuid, time, json, hashlib, secrets
+import pandas as pd
 import joblib
 
-import analysis  # 분석/프로파일/시각화 함수
-from analysis import load_user_data
+# 분석/프로파일/시각화
+import analysis
 from feature_spec import build_features, FEATURE_NAMES
 
-app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+# =========================================
+# 기본 경로/디렉터리
+# =========================================
+BASE_DIR = os.path.dirname(__file__)
+DB_PATH = os.path.join(BASE_DIR, "app.db")
 
-# ===== 데모 인메모리 저장 =====
-USERS = {}
-TOKENS = {}
-ASCII_MAPS = {}
+os.makedirs(os.path.join(BASE_DIR, "data_biometrics"), exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, "user_profiles"), exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, "user_models"), exist_ok=True)
+
+# =========================================
+# Flask / DB 설정
+# =========================================
+app = Flask(__name__)
+app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DB_PATH}"
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["JSON_AS_ASCII"] = False
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+db = SQLAlchemy(app)
+
+
+# =========================================
+# DB 모델
+# =========================================
+class User(db.Model):
+    __tablename__ = "users"
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(32), unique=True, index=True, nullable=False)
+    pwd_hash = db.Column(db.String(255), nullable=False)
+    name = db.Column(db.String(64), nullable=False)
+    email = db.Column(db.String(128), nullable=False)
+    created_at = db.Column(db.Float, default=lambda: time.time())
+    map_id = db.Column(db.String(32), nullable=True)  # ascii map id
+
+
+class AsciiMap(db.Model):
+    __tablename__ = "ascii_maps"
+    id = db.Column(db.Integer, primary_key=True)
+    map_id = db.Column(db.String(32), unique=True, index=True, nullable=False)
+    version = db.Column(db.Integer, default=1)
+    mapping = db.Column(db.Text, nullable=False)  # JSON 문자열
+    created_at = db.Column(db.Float, default=lambda: time.time())
+
+
+class SessionToken(db.Model):
+    __tablename__ = "session_tokens"
+    id = db.Column(db.Integer, primary_key=True)
+    token = db.Column(db.String(128), unique=True, index=True, nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    created_at = db.Column(db.Float, default=lambda: time.time())
+    user = db.relationship("User", backref="tokens")
+
+
+# 유니크 제약 (참고용)
+UniqueConstraint(User.username, name="uq_users_username")
+
+# =========================================
+# 유틸: ASCII map 생성
+# =========================================
 PRINTABLE = [i for i in range(32, 127)]
 
 
@@ -40,8 +93,13 @@ def create_ascii_map_for_user(username: str):
     shuffled = seeded_shuffle(f"user:{username}:v{version}".encode())
     mapping = {str(PRINTABLE[i]): shuffled[i] for i in range(len(PRINTABLE))}
     map_id = hashlib.sha256(f"{username}:{version}".encode()).hexdigest()[:16]
-    ASCII_MAPS[map_id] = {"map": mapping, "version": version}
-    map_hash = hashlib.sha256(json.dumps(mapping, sort_keys=True).encode()).hexdigest()
+
+    mapping_json = json.dumps(mapping, sort_keys=True, ensure_ascii=False)
+    rec = AsciiMap(map_id=map_id, version=version, mapping=mapping_json)
+    db.session.add(rec)
+    db.session.commit()
+
+    map_hash = hashlib.sha256(mapping_json.encode()).hexdigest()
     tx_id = "0x" + secrets.token_hex(8)
     print(
         f"[CHAIN] PutAsciiMap user={username} mapId={map_id} hash={map_hash} v={version} tx={tx_id}"
@@ -54,10 +112,15 @@ def _auth_user_from_header():
     if not auth.startswith("Bearer "):
         return None
     token = auth.split(" ", 1)[1]
-    return TOKENS.get(token)
+    tok = SessionToken.query.filter_by(token=token).first()
+    if not tok:
+        return None
+    return tok.user.username  # 서버 나머지 부분은 username만 알면 되니까 이렇게 줌
 
 
-# ===== 계정/로그인/매핑 =====
+# =========================================
+# 회원 / 로그인 / 매핑
+# =========================================
 @app.post("/api/signup")
 def api_signup():
     data = request.get_json(force=True)
@@ -72,17 +135,23 @@ def api_signup():
         return jsonify(error="아이디 형식이 올바르지 않습니다."), 400
     if not (5 <= len(password) <= 10):
         return jsonify(error="비밀번호 길이(5~10자)를 확인하세요."), 400
-    if username in USERS:
+
+    if User.query.filter_by(username=username).first():
         return jsonify(error="이미 존재하는 아이디입니다."), 409
 
-    USERS[username] = {
-        "pwd_hash": generate_password_hash(password),
-        "name": name,
-        "email": email,
-        "createdAt": time.time(),
-    }
+    u = User(
+        username=username,
+        pwd_hash=generate_password_hash(password),
+        name=name,
+        email=email,
+    )
+    db.session.add(u)
+    db.session.commit()
+
     map_id, tx_id = create_ascii_map_for_user(username)
-    USERS[username]["map_id"] = map_id
+    u.map_id = map_id
+    db.session.commit()
+
     return jsonify(ok=True, asciiMapId=map_id, txId=tx_id), 201
 
 
@@ -91,12 +160,17 @@ def api_login():
     data = request.get_json(force=True)
     username = (data.get("username") or "").strip().lower()
     password = data.get("password") or ""
-    u = USERS.get(username)
-    if not u or not check_password_hash(u["pwd_hash"], password):
+
+    u = User.query.filter_by(username=username).first()
+    if not u or not check_password_hash(u.pwd_hash, password):
         return jsonify(error="아이디/비밀번호 확인"), 401
-    token = secrets.token_urlsafe(32)
-    TOKENS[token] = username
-    return jsonify(token=token)
+
+    token_str = secrets.token_urlsafe(32)
+    tok = SessionToken(token=token_str, user_id=u.id)
+    db.session.add(tok)
+    db.session.commit()
+
+    return jsonify(token=token_str)
 
 
 @app.get("/api/me/ascii-map")
@@ -104,15 +178,24 @@ def api_map():
     user = _auth_user_from_header()
     if not user:
         return jsonify(error="인증 필요"), 401
-    map_id = USERS[user]["map_id"]
-    payload = ASCII_MAPS.get(map_id)
-    return jsonify(asciiMap=payload["map"], version=payload["version"])
+
+    u = User.query.filter_by(username=user).first()
+    if not u or not u.map_id:
+        return jsonify(error="매핑 없음"), 404
+
+    amap = AsciiMap.query.filter_by(map_id=u.map_id).first()
+    if not amap:
+        return jsonify(error="매핑 없음"), 404
+
+    mapping = json.loads(amap.mapping)
+    return jsonify(asciiMap=mapping, version=amap.version)
 
 
-# ===== 패턴 학습(수집) =====
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data_biometrics")
-os.makedirs(DATA_DIR, exist_ok=True)
-SESS = {}
+# =========================================
+# 패턴 수집 (이 부분은 파일 방식 유지)
+# =========================================
+DATA_DIR = os.path.join(BASE_DIR, "data_biometrics")
+SESS = {}  # session_id -> {user, path, count, ...}
 
 
 def _active_session_for(user):
@@ -127,6 +210,7 @@ def pattern_start():
     user = _auth_user_from_header()
     if not user:
         return jsonify(error="인증 필요"), 401
+
     j = request.get_json(silent=True) or {}
     policy = j.get("policy", "threshold")
     min_events = int(j.get("min_events", 600))
@@ -172,6 +256,7 @@ def pattern_collect():
     samples = j.get("samples", [])
     if not sid or sid not in SESS:
         return jsonify(ok=False, msg="invalid session"), 400
+
     s = SESS[sid]
     if not s["active"]:
         return jsonify(ok=False, msg="inactive session"), 400
@@ -256,7 +341,9 @@ def pattern_status():
     return jsonify(out)
 
 
-# ===== 분석/프로파일/시각화 =====
+# =========================================
+# 분석/프로파일/시각화
+# =========================================
 @app.post("/api/pattern/analyze")
 def analyze_pattern():
     user = _auth_user_from_header()
@@ -285,7 +372,9 @@ def analyze_pattern():
         return jsonify(error=f"서버 분석 오류: {e}"), 500
 
 
-# ===== 실시간 인증 =====
+# =========================================
+# 실시간 인증
+# =========================================
 @app.post("/api/pattern/verify")
 def verify_pattern():
     user = _auth_user_from_header()
@@ -297,8 +386,8 @@ def verify_pattern():
     if not samples:
         return jsonify(error="분석할 샘플 데이터가 없습니다."), 400
 
-    model_path = f"user_models/{user}_iforest_model.pkl"
-    profile_path = f"user_profiles/{user}_profile.pkl"
+    model_path = os.path.join(BASE_DIR, f"user_models/{user}_iforest_model.pkl")
+    profile_path = os.path.join(BASE_DIR, f"user_profiles/{user}_profile.pkl")
     if not (os.path.exists(model_path) and os.path.exists(profile_path)):
         return (
             jsonify(
@@ -317,14 +406,12 @@ def verify_pattern():
         X_live = build_features(live_df).dropna()
         if X_live.empty:
             return jsonify(error="유효한 피처가 없습니다."), 400
+
         Xz = scaler.transform(X_live.values)
-
-        # 1차: IForest inlier 비율
-        preds = model.predict(Xz)  # 1: 정상, -1: 이상
+        preds = model.predict(Xz)
         inlier_ratio = float((preds == 1).sum() / len(preds))
-        is_user = bool(inlier_ratio >= 0.5)  # 필요시 0.6~0.7
 
-        # 2차: digram 잔차 z-score (작을수록 좋음 → 점수로 변환) 11/4 추가
+        # 보조 점수 (digram 기반)
         z_list = []
         if {"prev_code", "code", "flight_ms"} <= set(live_df.columns):
             di = live_df.dropna(subset=["flight_ms"]).copy()
@@ -336,30 +423,12 @@ def verify_pattern():
                     mu = pair_stats[p]["mu"]
                     sd = max(pair_stats[p]["sd"], 1e-6)
                     z_list.append(abs((fl - mu) / sd))
-        z_aux = float(np.mean(z_list)) if z_list else 3.0  # 없으면 보수적으로 크게
+        z_aux = float(np.mean(z_list)) if z_list else 3.0
+        aux_score = 1.0 / (1.0 + (z_aux / 2.0))
 
-        # z→[0,1] 점수 (작을수록 1에 가깝게)
-        aux_score = 1.0 / (1.0 + (z_aux / 2.0))  # z=0→1, z=2→~0.5, z=4→~0.33
+        final = 0.6 * inlier_ratio + 0.4 * aux_score
+        is_user = bool(final >= 0.65)
 
-        # 속도 일변도 방지: kps 편차 패널티 11/4 추가
-        # 프로필에 저장된 전역 특징이 없으므로, live에서 근사: kps = 1000/dt
-        try:
-            kps_live = float((1000.0 / (X_live["dt_ms_clip"] + 1e-6)).median())
-        except Exception:
-            kps_live = 0.0
-        # 프로필의 전역 중앙값이 있으면 활용, 없으면 보수적으로 패스
-        kps_med = profile.get("kps_median", None)
-        kps_penalty = 1.0
-        if kps_med:
-            dev = abs(kps_live - float(kps_med)) / max(1e-6, float(kps_med))
-            if dev > 0.3:  # 30% 넘게 벗어나면 패널티
-                kps_penalty = max(0.6, 1.0 - 0.5 * (dev - 0.3))  # 0.6까지 감소
-
-        # 앙상블 최종점수
-        final = (0.6 * inlier_ratio + 0.4 * aux_score) * kps_penalty
-        is_user = bool(final >= 0.65)  # 권장 초기 임계
-
-        # 11/4 추가: 결과에 각 부분 점수도 반환
         return jsonify(
             {
                 "is_user": is_user,
@@ -367,7 +436,6 @@ def verify_pattern():
                 "parts": {
                     "inlier": round(inlier_ratio, 4),
                     "aux": round(aux_score, 4),
-                    "kps_penalty": round(kps_penalty, 3),
                 },
             }
         )
@@ -376,7 +444,9 @@ def verify_pattern():
         return jsonify(error=f"인증 중 서버 오류: {e}"), 500
 
 
-# ===== 에러 핸들러/실행 =====
+# =========================================
+# 에러 핸들러 / 실행
+# =========================================
 @app.errorhandler(404)
 def not_found(e):
     if request.path.startswith("/api/"):
@@ -390,4 +460,7 @@ def server_error(e):
 
 
 if __name__ == "__main__":
+    with app.app_context():
+        db.create_all()
+        print(f"[DB] SQLite 초기화 완료: {DB_PATH}")
     app.run(host="0.0.0.0", port=5000, debug=True)
