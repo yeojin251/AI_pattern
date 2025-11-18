@@ -10,6 +10,12 @@ from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 
+# 11/11
+import tkinter.font as font
+from tkinter import Tk, StringVar, DISABLED, NORMAL
+from tkinter import font as tkfont
+from tkinter import ttk
+
 # ========= 설정 =========
 API_BASE = "http://127.0.0.1:5000"  # Flask 서버 주소 (server.py)
 SIGNUP_URL = (
@@ -156,6 +162,9 @@ class DashboardServer:
         self.proc = psutil.Process()
         self.proc.cpu_percent(interval=None)
 
+        self.host = DASHBOARD_HOST  # 호스트/포트 저장
+        self.port = DASHBOARD_PORT
+
     def push_event(self, ch: str, remapped: str, cipher_hex: str):
         if not (self.loop and self.event_q):
             return
@@ -171,6 +180,8 @@ class DashboardServer:
     def start(self, host=DASHBOARD_HOST, port=DASHBOARD_PORT):
         if self.thread:
             return
+        self.host = host
+        self.port = port
         self.thread = threading.Thread(target=self._run, args=(host, port), daemon=True)
         self.thread.start()
         webbrowser.open(f"http://{host}:{port}/")
@@ -560,81 +571,268 @@ class HookEngine:
         self.ui_status_cb("암호화 OFF")
 
 
-# ========= GUI =========
+# 11/11
+# (선택) ttkbootstrap 있으면 자동 사용
+def _maybe_use_ttkbootstrap(root):
+    try:
+        import ttkbootstrap as tb
+
+        style = tb.Style("darkly")  # darkly / flatly / minty 등
+        return True
+    except Exception:
+        # 순정 ttk 사용
+        style = ttk.Style()
+        # 최신 느낌 나는 테마 & 컬러 세팅
+        for th in ("clam", "vista", "alt"):
+            if th in style.theme_names():
+                style.theme_use(th)
+                break
+        # 공통 폰트
+        default_font = tkfont.nametofont("TkDefaultFont")
+        default_font.configure(size=11)
+        tkfont.nametofont("TkTextFont").configure(size=11)
+        tkfont.nametofont("TkHeadingFont").configure(size=13, weight="bold")
+
+        # 색 구성 (라이트 기준)
+        bg = "#F5F6F7"
+        card = "#FFFFFF"
+        fg = "#1F2937"
+        sub = "#6B7280"
+        prim = "#2563EB"  # 버튼 포커스/강조
+        style.configure(".", background=bg, foreground=fg)
+        style.configure("Card.TFrame", background=card, relief="flat")
+        style.configure("Muted.TLabel", foreground=sub, background=card)
+        style.configure("Muted1.TLabel", background=card)
+        style.configure("Title.TLabel", font=("Segoe UI", 16, "bold"), background=bg)
+        style.configure("Title1.TLabel", font=("Segoe UI", 16, "bold"), background=card)
+        style.configure(
+            "Caption.TLabel", font=("Segoe UI", 10), foreground=sub, background=bg
+        )
+        style.configure(
+            "Accent.TButton", padding=(12, 8), font=("Segoe UI", 11, "semibold")
+        )
+        style.map(
+            "Accent.TButton",
+            foreground=[("disabled", "#9CA3AF"), ("!disabled", "#ffffff")],
+            background=[
+                ("disabled", "#D1D5DB"),
+                ("pressed", "#1D4ED8"),
+                ("active", "#1E40AF"),
+                ("!disabled", prim),
+            ],
+        )
+        style.configure(
+            "Link.TButton", relief="flat", padding=0, background=card, foreground=prim
+        )
+        style.map("Link.TButton", foreground=[("active", "#1D4ED8")])
+
+        # Entry
+        style.configure("TEntry", padding=8, relief="flat")
+        style.map("TEntry", fieldbackground=[("!disabled", "#FFFFFF")])
+
+        # 라벨프레임/구분선
+        style.configure("Section.TLabelframe", background=card)
+        style.configure(
+            "TLabelframe.Label", background=card, font=("Segoe UI", 11, "bold")
+        )
+        style.configure("TSeparator", background="#E5E7EB")
+
+        # Statusbar
+        style.configure("Status.TFrame", background=card)
+        style.configure("Status.TLabel", background=card, foreground=sub)
+
+        return False
+
+
+# ========= GUI (리팩토링된 버전) =========
 class App:
     def __init__(self):
         self.root = Tk()
-        self.root.title("KIM&JANG Secure Keyboard")
-        self.root.geometry("360x300")
-        self.root.resizable(False, False)
+        self.root.title("CapSecure — 실시간 키보드 암호화")
+        self.root.geometry("880x600")
+        self.root.minsize(720, 520)
+        self.is_bootstrap = _maybe_use_ttkbootstrap(self.root)
 
-        self.center = Frame(self.root)
-        self.center.pack(expand=True, fill="both")
-        self.form = Frame(self.center)
-        self.form.place(relx=0.5, rely=0.5, anchor="center")
-
-        Label(self.form, text="로그인", font=("Malgun Gothic", 12, "bold")).grid(
-            row=0, column=0, columnspan=2, pady=(10, 4)
-        )
-
+        # 상태 값
         self.id_var = StringVar()
         self.pw_var = StringVar()
-        self.msg_var = StringVar(value="회원가입 후 아이디/비밀번호로 로그인하세요.")
-        self.id_entry = Entry(self.form, textvariable=self.id_var, width=34)
-        self.pw_entry = Entry(self.form, textvariable=self.pw_var, width=34, show="*")
-        self.id_entry.grid(row=1, column=0, columnspan=2, padx=20, pady=6)
-        self.pw_entry.grid(row=2, column=0, columnspan=2, padx=20, pady=6)
-
-        self.btn_login = Button(
-            self.form, text="로그인", width=32, command=self.on_login
+        self.msg_var = StringVar(
+            value="로그인 후 매핑을 가져오고 대시보드를 열 수 있어요."
         )
-        self.btn_signup = Button(
-            self.form, text="회원가입", width=16, command=self.on_signup
-        )
-        self.btn_logout = Button(
-            self.form, text="로그아웃", width=16, command=self.on_logout, state=DISABLED
-        )
-        self.btn_learn = Button(
-            self.form,
-            text="패턴 학습 시작",
-            width=32,
-            state=DISABLED,
-            command=self.on_toggle_learn,
-        )
-        self.btn_analyze = Button(
-            self.form,
-            text="수집 데이터 분석",
-            width=32,
-            state=DISABLED,
-            command=self.on_analyze,
-        )
-
-        self.btn_login.grid(row=3, column=0, columnspan=2, padx=20, pady=(8, 4))
-        self.btn_signup.grid(row=4, column=0, padx=(20, 6), pady=(0, 8), sticky="e")
-        self.btn_logout.grid(row=4, column=1, padx=(6, 20), pady=(0, 8), sticky="w")
-        self.btn_learn.grid(row=5, column=0, columnspan=2, padx=20, pady=(0, 6))
-        self.btn_analyze.grid(row=6, column=0, columnspan=2, padx=20, pady=(0, 8))
-
-        self.lbl_msg = Label(
-            self.form,
-            textvariable=self.msg_var,
-            fg="#444",
-            wraplength=380,
-            justify="left",
-        )
-        self.lbl_msg.grid(row=7, column=0, columnspan=2, padx=20, pady=(2, 10))
-
+        self._token = None
         self.hook = None
         self.dashboard = None
-        self._token = None
         self._toggle_busy = False
+        self._learning = False
+        self.mapping = {}  # 매핑 저장용
+
+        # ===== 레이아웃 =====
+        self._build_layout()
+
+        # 종료 이벤트
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
+    # -------- UI 빌드 --------
+    def _build_layout(self):
+        root = self.root
+        root.grid_columnconfigure(0, weight=1)
+        root.grid_rowconfigure(0, weight=1)
+
+        shell = ttk.Frame(root, padding=16)
+        shell.grid(row=0, column=0, sticky="nsew")
+        shell.grid_columnconfigure(0, weight=1)
+        shell.grid_rowconfigure(1, weight=1)
+
+        # 헤더
+        header = ttk.Frame(shell)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        header.grid_columnconfigure(0, weight=1)
+        ttk.Label(header, text="CapSecure", style="Title.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(
+            header,
+            text="BlockChain + Real-Time Keyboard Encryption",
+            style="Caption.TLabel",
+        ).grid(row=1, column=0, sticky="w")
+
+        # 메인 2-컬럼
+        main = ttk.Frame(shell)
+        main.grid(row=1, column=0, sticky="nsew")
+        main.grid_columnconfigure(0, weight=1, uniform="col")
+        main.grid_columnconfigure(1, weight=2, uniform="col")
+        main.grid_rowconfigure(0, weight=1)
+
+        # (좌) 로그인 카드
+        left_card = ttk.Frame(main, style="Card.TFrame", padding=20)
+        left_card.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        left_card.grid_columnconfigure(1, weight=1)
+
+        ttk.Label(left_card, text="로그인", style="Title1.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w"
+        )
+        ttk.Separator(left_card).grid(
+            row=1, column=0, columnspan=2, sticky="ew", pady=10
+        )
+
+        ttk.Label(left_card, text="아이디", style="Muted1.TLabel").grid(
+            row=2,
+            column=0,
+            sticky="w",
+            pady=(4, 2),
+        )
+        self.ent_id = ttk.Entry(left_card, textvariable=self.id_var)
+        self.ent_id.grid(row=2, column=1, sticky="ew", pady=(4, 2))
+
+        ttk.Label(left_card, text="비밀번호", style="Muted1.TLabel").grid(
+            row=3, column=0, sticky="w", pady=(4, 2)
+        )
+        self.ent_pw = ttk.Entry(left_card, textvariable=self.pw_var, show="•")
+        self.ent_pw.grid(row=3, column=1, sticky="ew", pady=(4, 2))
+
+        btns = ttk.Frame(left_card, padding=0)
+        btns.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        btns.grid_columnconfigure(0, weight=1)
+        btns.grid_columnconfigure(1, weight=1)
+
+        self.btn_login = ttk.Button(
+            btns, text="로그인", command=self.on_login, style="Link.TButton"
+        )
+        self.btn_login.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
+        self.btn_signup = ttk.Button(
+            btns, text="회원가입", command=self.on_signup, style="Link.TButton"
+        )
+        self.btn_signup.grid(row=0, column=1, sticky="nsew", padx=0, pady=0)
+
+        # 상태/도움말
+        self.lbl_status = ttk.Label(
+            left_card,
+            textvariable=self.msg_var,
+            style="Muted.TLabel",
+            wraplength=320,
+            justify="left",
+        )
+        self.lbl_status.grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 0))
+
+        # (우) 제어/대시보드 카드
+        right_card = ttk.Frame(main, style="Card.TFrame", padding=20)
+        right_card.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        right_card.grid_columnconfigure(0, weight=1)
+        ttk.Label(right_card, text="실시간 암호화 제어", style="Title1.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Separator(right_card).grid(row=1, column=0, sticky="ew", pady=10)
+
+        # 토글/대시보드/학습
+        ctl = ttk.Frame(right_card)
+        ctl.grid(row=2, column=0, sticky="ew")
+        ctl.grid_columnconfigure(0, weight=1)
+        ctl.grid_columnconfigure(1, weight=1)
+        ctl.grid_columnconfigure(2, weight=1)
+        ctl.grid_columnconfigure(3, weight=1)  # ← 추가
+
+        self.btn_toggle = ttk.Button(
+            ctl,
+            text="암호화 시작",
+            command=self.on_toggle,
+            # style="Accent.TButton",
+            state=DISABLED,
+        )
+        self.btn_toggle.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+
+        self.btn_dash = ttk.Button(
+            ctl, text="대시보드 열기", command=self.on_open_dashboard, state=DISABLED
+        )
+        self.btn_dash.grid(row=0, column=1, sticky="ew", padx=(0, 8))
+
+        self.btn_learn = ttk.Button(
+            ctl, text="패턴 학습 시작", command=self.on_toggle_learning, state=DISABLED
+        )
+        self.btn_learn.grid(row=0, column=2, sticky="ew", padx=(0, 8))
+
+        # 기존 3개 버튼 아래에 추가
+        self.btn_analyze = ttk.Button(
+            ctl, text="학습 데이터 분석", command=self.on_analyze, state=DISABLED
+        )
+        self.btn_analyze.grid(row=0, column=3, sticky="ew")
+
+        # 사용 팁
+        tip = ttk.Label(
+            right_card,
+            text="TIP: 로그인 → 매핑 다운로드 → [암호화 시작].\n대시보드에서 실시간 로그/CPU/암호화 지연을 볼 수 있어요.",
+            style="Muted.TLabel",
+            justify="left",
+        )
+        tip.grid(row=3, column=0, sticky="w", pady=(12, 0))
+
+        # 하단 상태바
+        statusbar = ttk.Frame(shell, style="Status.TFrame", padding=(8, 6))
+        statusbar.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        statusbar.grid_columnconfigure(0, weight=1)
+        ttk.Label(statusbar, text="© CapSecure", style="Status.TLabel").grid(
+            row=0, column=1, sticky="e"
+        )
+
+    # -------- UX 헬퍼 --------
     def set_status(self, text: str):
         self.root.after(0, lambda: self.msg_var.set(text))
 
+    def _ui_after_login(self):
+        self.btn_toggle.config(state=NORMAL)
+        self.btn_dash.config(state=NORMAL)
+        self.btn_learn.config(state=NORMAL)
+        if hasattr(self, "btn_analyze"):
+            self.btn_analyze.config(state=NORMAL)  # ← 추가
+
+        self.btn_login.config(text="로그아웃", command=self.on_logout, state=NORMAL)
+        # 회원가입 버튼 비활성화
+        self.btn_signup.config(state=DISABLED)
+
+    # -------- 이벤트 핸들러 --------
     def on_signup(self):
         if SIGNUP_URL:
+            import webbrowser
+
             webbrowser.open(SIGNUP_URL)
         self.set_status("브라우저에서 회원가입을 완료한 뒤, 이 창에서 로그인하세요.")
 
@@ -646,6 +844,9 @@ class App:
             return
         self.btn_login.config(state=DISABLED)
         self.set_status("서버 로그인 중…")
+
+        import threading
+
         threading.Thread(
             target=self._login_flow, args=(username, password), daemon=True
         ).start()
@@ -656,76 +857,142 @@ class App:
             self._token = token
             self.set_status("매핑 다운로드 중…")
             mapping, version = api_get_ascii_map(token)
+            self.mapping = mapping  # <-- [FIX] 매핑 저장
 
-            user_secret = secrets.token_bytes(32)
-            salt = secrets.token_bytes(32)
-            session_key = derive_session_key(user_secret, salt)
-            encryptor = AESEncryptor(session_key)
+            # Hook/Dashboard 준비
+            user_secret = hashlib.sha256(
+                username.encode()
+            ).digest()  # 예시: 서버에서 받아온 시크릿으로 교체
+            salt = hashlib.sha256(str(version).encode()).digest()  # str()로 안전하게
+            key = derive_session_key(user_secret, salt)
+            encryptor = AESEncryptor(key)
 
-            def get_crypto_ms():
-                return self.hook.last_crypto_ms if self.hook else 0.0
-
-            self.dashboard = DashboardServer(lambda: mapping, get_crypto_ms)
+            # 대시보드
+            self.dashboard = DashboardServer(
+                mapping_getter=lambda: getattr(
+                    self, "mapping", {}
+                ),  # <-- [FIX] 안전한 게터
+                crypto_ms_getter=lambda: (
+                    self.hook.last_crypto_ms if self.hook else 0.0
+                ),  # <-- [FIX] 안전한 게터
+            )
             self.dashboard.start()
 
-            self.hook = HookEngine(
-                mapping,
+            # 후킹
+            self.hook = HookEngine(  # <-- [FIX] KeyHooker -> HookEngine
+                self.mapping,
                 encryptor,
-                self.set_status,
+                self.set_status,  # 콜백 전달
                 dashboard=self.dashboard,
-                api_base=API_BASE,
-                api_token=token,
+                api_token=self._token,  # <-- [FIX] 토큰 전달
             )
-            self.hook.start()
-
-            self.set_status(
-                f"로그인 성공! 매핑 v{version} 적용. 키 입력을 암호화합니다."
-            )
-            self.root.after(
-                0,
-                lambda: (
-                    self.btn_logout.config(state=NORMAL),
-                    self.btn_learn.config(state=NORMAL),
-                    self.btn_analyze.config(state=NORMAL),
-                ),
-            )
+            self.set_status(f"로그인 완료. 매핑 v{version} 적용됨.")
+            self.root.after(0, self._ui_after_login)
         except Exception as e:
-            self.set_status(f"에러: {e}")
+            self.set_status(f"로그인 실패: {e}")
             self.root.after(0, lambda: self.btn_login.config(state=NORMAL))
 
-    def on_toggle_learn(self):
-        if not self.hook:
-            self.set_status("로그인 후 사용하세요.")
-            return
+    def on_logout(self):
+        self.btn_login.config(state=DISABLED)
+        try:
+            # 학습 중이면 종료
+            if getattr(self, "_learning", False):
+                try:
+                    self._pattern_client.stop_learning()
+                except Exception:
+                    pass
+                self._learning = False
+                self.btn_learn.config(text="패턴 학습 시작")
+
+            # 후킹 중지
+            if self.hook:
+                try:
+                    self.hook.stop()
+                except Exception:
+                    pass
+            if self.dashboard:
+                try:
+                    self.dashboard.stop()
+                except Exception:
+                    pass
+
+            # 토큰/핸들 정리
+            self._token = None
+            self.hook = None
+            self.dashboard = None
+
+            # 컨트롤 비활성화
+            self.btn_toggle.config(state=DISABLED, text="암호화 시작")
+            self.btn_dash.config(state=DISABLED)
+            self.btn_learn.config(state=DISABLED)
+            if hasattr(self, "btn_analyze"):
+                self.btn_analyze.config(state=DISABLED)
+
+            # 비밀번호 클리어
+            try:
+                self.pw_var.set("")
+            except Exception:
+                pass
+
+            self.set_status("로그아웃 되었습니다.")
+
+        finally:
+            self.btn_login.config(text="로그인", command=self.on_login, state=NORMAL)
+            # 회원가입 버튼 다시 활성화
+            self.btn_signup.config(state=NORMAL)
+
+    def on_open_dashboard(self):
+        import webbrowser
+
+        if self.dashboard:
+            webbrowser.open(f"http://{self.dashboard.host}:{self.dashboard.port}")
+            self.set_status("대시보드를 브라우저로 열었어요.")
+        else:
+            self.set_status("대시보드가 아직 준비되지 않았어요.")
+
+    def on_toggle(self):
         if self._toggle_busy:
             return
         self._toggle_busy = True
-        self.btn_learn.config(state=DISABLED)
-        self.set_status("처리 중…")
+        try:
+            if self.hook and not self.hook._running:  # <-- [FIX] .running -> ._running
+                self.hook.start()
+                self.btn_toggle.config(text="암호화 중지")
+                self.set_status("키 입력 암호화를 시작했어요.")
+            elif self.hook and self.hook._running:  # <-- [FIX] .running -> ._running
+                self.hook.stop()
+                self.btn_toggle.config(text="암호화 시작")
+                self.set_status("키 입력 암호화를 중지했어요.")
+        finally:
+            # 빠른 클릭 방지
+            self.root.after(100, lambda: setattr(self, "_toggle_busy", False))
 
-        def _run():
+    def on_toggle_learning(self):
+        # [FIX] PatternClient 대신 self.hook 사용
+        if not self.hook:
+            self.set_status("후킹이 준비되지 않았어요. 다시 로그인해 주세요.")
+            return
+
+        if not self._learning:
             try:
-                if self.hook.learn_active:
-                    self.hook.stop_learning()
-                    self.set_status("패턴 학습 정지됨.")
-                    self.root.after(
-                        0, lambda: self.btn_learn.config(text="패턴 학습 시작")
-                    )
-                else:
-                    self.hook.start_learning(min_events=600, policy="threshold")
-                    self.set_status("패턴 학습 수집 시작… 타이핑해주세요.")
-                    self.root.after(
-                        0, lambda: self.btn_learn.config(text="패턴 학습 정지")
-                    )
+                # HookEngine에 내장된 학습 시작 메서드 호출
+                self.hook.start_learning(policy="threshold", min_events=600)
+                self._learning = True
+                self.set_status("패턴 학습을 시작했어요.")
+                self.btn_learn.config(text="학습 종료")
             except Exception as e:
-                self.set_status(f"패턴 학습 오류: {e}")
+                self.set_status(f"학습 시작 실패: {e}")
+        else:
+            try:
+                # HookEngine에 내장된 학습 종료 메서드 호출
+                self.hook.stop_learning()
+                self.set_status("패턴 학습을 종료했어요.")
+            except Exception as e:
+                self.set_status(f"학습 종료 오류: {e}")
             finally:
-                self._toggle_busy = False
-                self.root.after(0, lambda: self.btn_learn.config(state=NORMAL))
+                self._learning = False
+                self.btn_learn.config(text="패턴 학습 시작")
 
-        threading.Thread(target=_run, daemon=True).start()
-
-    # 분석 버튼
     def on_analyze(self):
         if not self._token:
             self.set_status("분석을 위해 먼저 로그인하세요.")
@@ -756,45 +1023,15 @@ class App:
 
         threading.Thread(target=_run, daemon=True).start()
 
-    def on_logout(self):
-        try:
-            if self.dashboard:
-                try:
-                    self.dashboard.push_close_signal()
-                except:
-                    pass
-            if self.hook and self.hook.learn_active:
-                try:
-                    self.hook.stop_learning()
-                except:
-                    pass
-            if self.hook:
-                self.hook.stop()
-                self.hook = None
-            if self.dashboard:
-                self.dashboard.stop()
-                self.dashboard = None
-        finally:
-            self._token = None
-            self._toggle_busy = False
-            self.id_var.set("")
-            self.pw_var.set("")
-            self.btn_login.config(state=NORMAL)
-            self.btn_logout.config(state=DISABLED)
-            self.btn_learn.config(state=DISABLED, text="패턴 학습 시작")
-            self.btn_analyze.config(state=DISABLED)
-            self.set_status("로그아웃 되었습니다. 다시 로그인하세요.")
-
     def on_close(self):
+        # 안전 종료
         try:
-            if self.hook and self.hook.learn_active:
-                try:
-                    self.hook.stop_learning()
-                except:
-                    pass
+            if self._learning:
+                self.on_toggle_learning()
             if self.hook:
                 self.hook.stop()
             if self.dashboard:
+                self.dashboard.push_close_signal()
                 self.dashboard.stop()
         finally:
             self.root.destroy()
