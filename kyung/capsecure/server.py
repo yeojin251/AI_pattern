@@ -7,6 +7,7 @@ from sqlalchemy import UniqueConstraint
 import os, csv, uuid, time, json, hashlib, secrets
 import pandas as pd
 import joblib
+import numpy as np  # 추가
 
 # 분석/프로파일/시각화
 import analysis
@@ -423,8 +424,14 @@ def verify_pattern():
                     mu = pair_stats[p]["mu"]
                     sd = max(pair_stats[p]["sd"], 1e-6)
                     z_list.append(abs((fl - mu) / sd))
-        z_aux = float(np.mean(z_list)) if z_list else 3.0
-        aux_score = 1.0 / (1.0 + (z_aux / 2.0))
+
+        if z_list:
+            z_aux = float(np.mean(z_list))
+            aux_score = 1.0 / (1.0 + (z_aux / 2.0))  # z-score 기반(낮을수록 좋음)
+        else:
+            # 🔧 백업: 쌍글자 통계가 없으면 inlier_ratio를 그대로 보조점수로 사용
+            # (이렇게 하면 76% 상한 고정이 사라지고, inlier 변화에 따라 점수가 자연스럽게 오르내립니다.)
+            aux_score = inlier_ratio
 
         final = 0.6 * inlier_ratio + 0.4 * aux_score
         is_user = bool(final >= 0.65)
@@ -433,6 +440,7 @@ def verify_pattern():
             {
                 "is_user": is_user,
                 "score": f"{final:.2%}",
+                "score_num": round(final, 4),
                 "parts": {
                     "inlier": round(inlier_ratio, 4),
                     "aux": round(aux_score, 4),

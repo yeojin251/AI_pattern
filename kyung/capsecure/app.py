@@ -328,7 +328,7 @@ class HookEngine:
         self.verify_buf = []
         self.verify_lock = threading.Lock()
         self.VERIFY_BATCH_SIZE = 8  # 빠른 피드백
-        self.VERIFY_FLUSH_SEC = 2.0  # 2초 이상 대기하면 강제 전송
+        self.VERIFY_FLUSH_SEC = 2  # 2초 이상 대기하면 강제 전송
         self._verify_timer = None
         self._last_verify_send = 0.0
 
@@ -436,14 +436,24 @@ class HookEngine:
                 f"{self.api_base}/api/pattern/verify",
                 headers=self._headers(),
                 json={"samples": batch},
-                timeout=6,
+                timeout=5,
             )
             self._last_verify_send = time.time()
             if r.status_code == 200:
                 result = r.json()
+
+                score_val = result.get("score_num")
+                score_txt = None
+                if isinstance(score_val, (int, float)):
+                    score_txt = f"{score_val*100:.2f}%"
+                else:
+                    score_txt = str(
+                        result.get("score")
+                    )  # 서버가 문자열 퍼센트를 주는 기존 형태도 수용
+
                 auth_msg = "인증 성공" if result.get("is_user") else "인증 실패"
                 # ✅ 정확도만 표시 (에러 메시지 UI 출력 없음)
-                self.ui_status_cb(f"{auth_msg} · 정확도 {result.get('score')}")
+                self.ui_status_cb(f"{auth_msg} · 정확도 {score_txt}")
             else:
                 # ❌ 서버 오류 발생 시 UI에 표시하지 않음 (조용히 패스)
                 # print(f"[verify] HTTP {r.status_code}: {r.text}")
@@ -456,14 +466,29 @@ class HookEngine:
     def _verify_timer_loop(self):
         # 일정 주기마다 버퍼가 조금이라도 있으면 강제 전송(사용자 피드백 지연 방지)
         while self._running:
-            time.sleep(1.0)
+            time.sleep(2)
             with self.verify_lock:
-                has_buf = len(self.verify_buf) > 0
-            if (
-                has_buf
-                and (time.time() - self._last_verify_send) >= self.VERIFY_FLUSH_SEC
-            ):
-                self._verify_typing_pattern(forced=True)
+                has_buf = len(self.verify_buf)
+
+            if has_buf == 0:
+                continue
+
+            # 배치 임계 도달 시 즉시 전송
+            if has_buf >= self.VERIFY_BATCH_SIZE:
+                threading.Thread(
+                    target=self._verify_typing_pattern,
+                    kwargs={"forced": True},
+                    daemon=True,
+                ).start()
+                continue
+
+            # 배치 미달이어도 마지막 전송으로부터 VERIFY_FLUSH_SEC 경과 시 플러시
+            if (time.time() - self._last_verify_send) >= self.VERIFY_FLUSH_SEC:
+                threading.Thread(
+                    target=self._verify_typing_pattern,
+                    kwargs={"forced": True},
+                    daemon=True,
+                ).start()
 
     # ====== 키 이벤트 ======
     def _on_press(self, key):
@@ -538,8 +563,28 @@ class HookEngine:
                 # 배치 도달 시 즉시 검증
                 if nbuf >= self.VERIFY_BATCH_SIZE:
                     threading.Thread(
-                        target=self._verify_typing_pattern, daemon=True
+                        target=self._verify_typing_pattern,
+                        kwargs={"forced": True},
+                        daemon=True,
                     ).start()
+                # else:
+                #     # 스페이스/엔터/구두점에서는 바로 전송 (자연스러운 피드백)
+                #     trigger_now = False
+                #     try:
+                #         if key.char in (".", "!", "?", ",", ";", ":"):
+                #             trigger_now = True
+                #     except AttributeError:
+                #         # 특수키
+                #         from pynput.keyboard import Key
+
+                #         if key in (Key.space, Key.enter, Key.tab):
+                #             trigger_now = True
+                #     if trigger_now:
+                #         threading.Thread(
+                #             target=self._verify_typing_pattern,
+                #             kwargs={"forced": True},
+                #             daemon=True,
+                #         ).start()
 
             self.last_up_mono = t_up_mono
             self.last_up_code = code
